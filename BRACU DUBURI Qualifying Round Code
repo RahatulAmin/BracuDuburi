@@ -1,0 +1,735 @@
+/////////////////////////////////////////////////////////////////////////////
+#include <math.h>
+#include <Wire.h>
+#include "Adafruit_Sensor.h"
+#include "Adafruit_BMP280.h"
+#include "Adafruit_HMC5883_U.h"
+Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+Adafruit_BMP280 bme; // I2C
+
+/////////////////////////////////////////gy-521//////////////////////////////
+
+int16_t Acc_rawX, Acc_rawY, Acc_rawZ, Gyr_rawX, Gyr_rawY, Gyr_rawZ;
+
+
+float Acceleration_angle[2];
+float Gyro_angle[2];
+float Total_angle[2];
+
+
+float elapsedTime, time, timePrev;
+int i;
+float rad_to_deg = 180 / 3.141592654;
+
+//////////////////////////////**************************/////////////////////
+
+int mot1_en = 46;
+int mot1_1 = 53;
+int mot1_2 = 51;
+
+int mot2_en = 44;
+int mot2_1 = 49;
+int mot2_2 = 47;
+
+int mot3_en = 3;
+int mot3_2 = 43;
+int mot3_1 = 41;
+
+int mot4_en = 2;
+int mot4_2 = 39;
+int mot4_1 = 37;
+
+int mot5_en = 5;
+int mot5_1 = 35;
+int mot5_2 = 33;
+
+int mot6_en = 4;
+int mot6_1 = 31;
+int mot6_2 = 29;
+
+int mot7_en = 9;
+int mot7_1 = 16;
+int mot7_2 = 15;
+
+int mot8_en = 10;
+int mot8_1 = 18;
+int mot8_2 = 17;
+
+
+int mov_pwm = 255;
+int pwmA = 0;
+int pwmB = 0;
+int turn_pwm = 130;
+float turn_factor = 30;
+float headerror;
+int headcal;
+bool alt_hold = false;
+bool jayga_hold = false;
+bool head_lock = false;
+bool forwardrun = false;
+bool qualify = false;
+int pwm = 200;
+int set_alt = -300;
+int target_alt = 0;
+int current_alt = 0;
+float target_head = 0;
+float current_head = 0;
+char chh;
+
+
+
+void setup() {
+  { pinMode(13, OUTPUT);
+    digitalWrite(13, 0);
+    pinMode(mot1_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot1_2, OUTPUT) ;
+
+    pinMode(mot2_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot2_2, OUTPUT) ;
+
+    pinMode(mot3_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot3_2, OUTPUT) ;
+
+    pinMode(mot4_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot4_2, OUTPUT) ;
+
+    pinMode(mot5_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot5_2, OUTPUT) ;
+
+    pinMode(mot6_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot6_2, OUTPUT) ;
+
+    pinMode(mot7_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot7_2, OUTPUT) ;
+
+    pinMode(mot8_1, OUTPUT) ; //Logic pins are also set as output
+    pinMode(mot8_2, OUTPUT) ;
+
+    Serial.begin(9600);
+
+    pwmA = mov_pwm;
+    pwmB = mov_pwm;
+  }
+  {
+    Wire.begin(); //begin the wire comunication
+    Wire.beginTransmission(0x68);
+    Wire.write(0x6B);
+    Wire.write(0);
+    Wire.endTransmission(true);
+
+    delay(1000); /*Give some delay, 7s, to have time to connect
+                     the propellers and let everything start up*/
+    time = millis(); //Start counting time in milliseconds
+
+  }
+
+  bme.begin();
+  mag.begin();
+  stopAll();
+
+}
+
+void loop() {
+  readBMP280();
+  compasss();
+
+  if (alt_hold == true) {
+    hold_altitude();
+  }
+  if (head_lock == true) {
+    head_hold();
+    if (jayga_hold == true) {
+      stop_mov();
+    }
+  }
+
+  if (forwardrun == true) {
+    forward();
+  }
+
+  if (qualify == true) {
+    hold_altitude();
+    if (current_alt <= target_alt) {
+      forwardrun = true;
+    }
+  }
+
+  //  stopAll();
+  if (Serial.available() > 0) {
+    char ch = Serial.read();
+    Serial.println(ch);
+    //    stop_mov();
+    //    delay(300);
+
+    if (ch == 'w') {
+      forward();
+      jayga_hold = false;
+    }
+    if (ch == 's') {
+      backward();
+      jayga_hold = false;
+    }
+    if (ch == 'a') {
+      left();
+      jayga_hold = false;
+    }
+    if (ch == 'd') {
+      right();
+      jayga_hold = false;
+    }
+    if (ch == 'f') {
+      stop_mov();
+    }
+
+    if (ch == 'h') {
+      target_head = current_head;
+      head_lock = true;
+    }
+
+    if (ch == 'j') {
+      jayga_hold = true;
+    }
+
+    if (ch == 'r') {
+      forwardrun = true;
+    }
+
+    if (ch == 't') {
+      forwardrun = false;
+      qualify = false;
+
+    }
+    if (ch == 'q') {
+      target_alt = set_alt;
+      qualify = true;
+    }
+
+    if (ch == 'g') {
+      head_lock = false;
+      jayga_hold = false;
+      headerror = 0;
+      pwmA = mov_pwm;
+      pwmB = mov_pwm;
+    }
+
+    if ((ch == 'p') && (jayga_hold == true) && (head_lock == true)) {
+
+      target_head = target_head + 90;
+      if (target_head > 180) {
+        target_head = target_head - 360;
+      }
+    }
+
+    if ((ch == 'o') && (jayga_hold == true) && (head_lock == true)) {
+
+      target_head = target_head - 90;
+      if (target_head < -180) {
+        target_head = target_head + 360;
+      }
+    }
+
+    if (ch == '[') {
+      if ((jayga_hold == true) && (head_lock == true)) {
+        target_head = target_head - 10;
+        if (target_head < -180) {
+          target_head = target_head + 360;
+        }
+      }
+      else {
+        left_turn();
+      }
+    }
+
+    if (ch == ']') {
+      if ((jayga_hold == true) && (head_lock == true)) {
+        target_head = target_head + 10;
+        if (target_head > 180) {
+          target_head = target_head - 360;
+        }
+      }
+      else {
+        right_turn();
+      }
+    }
+    if (ch == 'k') {
+      stopAll();
+      jayga_hold = false;
+      alt_hold = false;
+      head_lock = false;
+      forwardrun = false;
+      qualify = false;
+    }
+
+    if (ch == 'z') {
+      m1();
+
+    }
+    if (ch == 'x') {
+      m2();
+    }
+    if (ch == 'c') {
+      m3();
+    }
+    if (ch == 'v') {
+      m4();
+    }
+    if (ch == 'b') {
+      m5();
+    }
+    if (ch == 'n') {
+      m6();
+    }
+    if (ch == 'm') {
+      m7();
+    }
+    if (ch == ',') {
+      m8();
+    }
+    if (ch == '`') {
+      pwm = 150;
+      vasho();
+      alt_hold = false;
+    }
+    if (ch == '1') {
+      pwm = 50;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '2') {
+      pwm = 100;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '3') {
+      pwm = 150;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '4') {
+      pwm = 175;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '5') {
+      pwm = 200;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '6') {
+      pwm = 220;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '7') {
+      pwm = 240;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '8') {
+      pwm = 255;
+      dubu();
+      alt_hold = false;
+
+    }
+    if (ch == '0') {
+      pwm = 0;
+      dubu();
+      alt_hold = false;
+    }
+
+    if (ch == '9') {
+      target_alt = current_alt;
+      alt_hold = true;
+    }
+  }
+
+
+}
+
+///////////////////////////////
+void hold_altitude() {
+
+  if (current_alt <= target_alt) {
+    pwm = 0;
+    dubu();
+  }
+  else if (current_alt > target_alt + 3) {
+    pwm = 200;
+    dubu();
+
+  }
+}
+//////////////////////////////
+void head_hold() {
+  float error = target_head - current_head;
+
+  if (error > 180) {
+    headerror = error - 360;
+  }
+  else if (error < -180) {
+    headerror = error + 360;
+  }
+  else {
+    headerror = error;
+  }
+  Serial.print("  err = ");
+  Serial.print(headerror);
+  Serial.print("  ");
+  headcal = int(abs(headerror * turn_factor));
+
+  if (headerror < -.75) {
+    pwmA = mov_pwm;
+    pwmB = mov_pwm - headcal;
+    if (pwmB < 0) {
+      pwmB = 0;
+    }
+  }
+  else if (headerror > .75) {
+    pwmA = mov_pwm - headcal;
+    pwmB = mov_pwm;
+    if (pwmA < 0) {
+      pwmA = 0;
+    }
+  }
+  else if (headerror >= -.75 && headerror <= .75)
+  {
+    pwmA = mov_pwm;
+    pwmB = mov_pwm;
+  }
+  Serial.print(" A = ");
+  Serial.print(pwmA);
+  Serial.print(" ");
+  Serial.print(" B = ");
+  Serial.print(pwmB);
+  Serial.print("  ");
+}
+
+void m1() {
+  analogWrite(mot1_en, 100) ;
+  digitalWrite(mot1_1, LOW) ;
+  digitalWrite(mot1_2, HIGH) ;
+}
+
+void m2() {
+  analogWrite(mot2_en, 100) ;
+  digitalWrite(mot2_1, LOW) ;
+  digitalWrite(mot2_2, HIGH) ;
+}
+
+void m3() {
+  analogWrite(mot3_en, 100) ;
+  digitalWrite(mot3_1, 0) ;
+  digitalWrite(mot3_2, 1) ;
+}
+
+void m4() {
+  analogWrite(mot4_en, 100) ;
+  digitalWrite(mot4_1, 0) ;
+  digitalWrite(mot4_2, 1) ;
+}
+
+void m5() {
+  digitalWrite(mot5_1, 1) ;
+  digitalWrite(mot5_2, 0) ;
+  analogWrite(mot5_en, 200) ;
+
+}
+
+void m6() {
+  digitalWrite(mot6_1, 1) ;
+  digitalWrite(mot6_2, 0) ;
+  analogWrite(mot6_en, 200) ;
+
+}
+
+void m7() {
+  digitalWrite(mot7_1, 1) ;
+  digitalWrite(mot7_2, 0) ;
+  analogWrite(mot7_en, 200) ;
+
+
+}
+
+void m8() {
+  digitalWrite(mot8_1, 1) ;
+  digitalWrite(mot8_2, 0) ;
+  analogWrite(mot8_en, 200) ;
+
+}
+
+void backward() {
+  Serial.print(" b ");
+  analogWrite(mot1_en, pwmA) ;
+  digitalWrite(mot1_1, HIGH) ;
+  digitalWrite(mot1_2, LOW) ;
+
+  analogWrite(mot2_en, pwmA) ;
+  digitalWrite(mot2_1, HIGH) ;
+  digitalWrite(mot2_2, LOW) ;
+
+  analogWrite(mot3_en, pwmB) ;
+  digitalWrite(mot3_1, HIGH) ;
+  digitalWrite(mot3_2, LOW) ;
+
+  analogWrite(mot4_en, pwmB) ;
+  digitalWrite(mot4_1, HIGH) ;
+  digitalWrite(mot4_2, LOW) ;
+}
+
+void forward() {
+  Serial.print(" f ");
+  analogWrite(mot1_en, pwmB) ;
+  digitalWrite(mot1_1, LOW) ;
+  digitalWrite(mot1_2, HIGH) ;
+
+  analogWrite(mot2_en, pwmB) ;
+  digitalWrite(mot2_1, LOW) ;
+  digitalWrite(mot2_2, HIGH) ;
+
+  analogWrite(mot3_en, pwmA) ;
+  digitalWrite(mot3_1, LOW) ;
+  digitalWrite(mot3_2, HIGH) ;
+
+  analogWrite(mot4_en, pwmA) ;
+  digitalWrite(mot4_1, LOW) ;
+  digitalWrite(mot4_2, HIGH) ;
+}
+
+void left() {
+  Serial.print(" l ");
+  analogWrite(mot1_en, pwmB) ;
+  digitalWrite(mot1_1, LOW) ;
+  digitalWrite(mot1_2, HIGH) ;
+
+  analogWrite(mot2_en, pwmA) ;
+  digitalWrite(mot2_1, HIGH) ;
+  digitalWrite(mot2_2, LOW) ;
+
+  analogWrite(mot3_en, pwmA) ;
+  digitalWrite(mot3_1, LOW) ;
+  digitalWrite(mot3_2, HIGH) ;
+
+  analogWrite(mot4_en, pwmB) ;
+  digitalWrite(mot4_1, HIGH) ;
+  digitalWrite(mot4_2, LOW) ;
+}
+
+void right() {
+  Serial.print(" r ");
+  analogWrite(mot1_en, pwmB) ;
+  digitalWrite(mot1_1, HIGH) ;
+  digitalWrite(mot1_2, LOW) ;
+
+  analogWrite(mot2_en, pwmA) ;
+  digitalWrite(mot2_1, LOW) ;
+  digitalWrite(mot2_2, HIGH) ;
+
+  analogWrite(mot3_en, pwmB) ;
+  digitalWrite(mot3_1, HIGH) ;
+  digitalWrite(mot3_2, LOW) ;
+
+  analogWrite(mot4_en, pwmA) ;
+  digitalWrite(mot4_1, LOW) ;
+  digitalWrite(mot4_2, HIGH) ;
+}
+
+void right_turn() {
+  analogWrite(mot1_en, turn_pwm) ;
+  digitalWrite(mot1_1, LOW) ;
+  digitalWrite(mot1_2, HIGH) ;
+
+  analogWrite(mot2_en, turn_pwm) ;
+  digitalWrite(mot2_1, LOW) ;
+  digitalWrite(mot2_2, HIGH) ;
+
+  analogWrite(mot3_en, turn_pwm) ;
+  digitalWrite(mot3_1, HIGH) ;
+  digitalWrite(mot3_2, LOW) ;
+
+  analogWrite(mot4_en, turn_pwm) ;
+  digitalWrite(mot4_1, HIGH) ;
+  digitalWrite(mot4_2, LOW) ;
+}
+
+void left_turn() {
+  analogWrite(mot1_en, turn_pwm) ;
+  digitalWrite(mot1_1, HIGH) ;
+  digitalWrite(mot1_2, LOW) ;
+
+  analogWrite(mot2_en, turn_pwm) ;
+  digitalWrite(mot2_1, HIGH) ;
+  digitalWrite(mot2_2, LOW) ;
+
+  analogWrite(mot3_en, turn_pwm) ;
+  digitalWrite(mot3_1, LOW) ;
+  digitalWrite(mot3_2, HIGH) ;
+
+  analogWrite(mot4_en, turn_pwm) ;
+  digitalWrite(mot4_1, LOW) ;
+  digitalWrite(mot4_2, HIGH) ;
+}
+void stop_mov() {
+
+
+  if (headerror < -.75) {
+    Serial.print(" sl ");
+    analogWrite(mot1_en, headcal) ;
+    digitalWrite(mot1_1, HIGH) ;
+    digitalWrite(mot1_2, LOW) ;
+
+    analogWrite(mot2_en, headcal) ;
+    digitalWrite(mot2_1, HIGH) ;
+    digitalWrite(mot2_2, LOW) ;
+
+    analogWrite(mot3_en, headcal) ;
+    digitalWrite(mot3_1, LOW) ;
+    digitalWrite(mot3_2, HIGH) ;
+
+    analogWrite(mot4_en, headcal) ;
+    digitalWrite(mot4_1, LOW) ;
+    digitalWrite(mot4_2, HIGH) ;
+  }
+  else if (headerror > .75) {
+    Serial.print(" sr ");
+    analogWrite(mot1_en, headcal) ;
+    digitalWrite(mot1_1, LOW) ;
+    digitalWrite(mot1_2, HIGH) ;
+
+    analogWrite(mot2_en, headcal) ;
+    digitalWrite(mot2_1, LOW) ;
+    digitalWrite(mot2_2, HIGH) ;
+
+    analogWrite(mot3_en, headcal) ;
+    digitalWrite(mot3_1, HIGH) ;
+    digitalWrite(mot3_2, LOW) ;
+
+    analogWrite(mot4_en, headcal) ;
+    digitalWrite(mot4_1, HIGH) ;
+    digitalWrite(mot4_2, LOW) ;
+  }
+
+  else {
+    Serial.print(" H ");
+    analogWrite(mot1_en, 0) ;
+    digitalWrite(mot1_1, 0) ;
+    digitalWrite(mot1_2, 0) ;
+
+    analogWrite(mot2_en, 0) ;
+    digitalWrite(mot2_1, 0) ;
+    digitalWrite(mot2_2, 0) ;
+
+    analogWrite(mot3_en, 0) ;
+    digitalWrite(mot3_1, 0) ;
+    digitalWrite(mot3_2, 0) ;
+
+    analogWrite(mot4_en, 0) ;
+    digitalWrite(mot4_1, 0) ;
+    digitalWrite(mot4_2, 0) ;
+  }
+}
+
+void dubu() {
+  digitalWrite(mot5_1, 1) ;
+  digitalWrite(mot5_2, 0) ;
+  digitalWrite(mot6_1, 1) ;
+  digitalWrite(mot6_2, 0) ;
+  digitalWrite(mot7_1, 1) ;
+  digitalWrite(mot7_2, 0) ;
+  digitalWrite(mot8_1, 1) ;
+  digitalWrite(mot8_2, 0) ;
+  analogWrite(mot5_en, pwm) ;
+  analogWrite(mot6_en, pwm) ;
+  analogWrite(mot7_en, pwm) ;
+  analogWrite(mot8_en, pwm) ;
+}
+
+void vasho() {
+  digitalWrite(mot5_1, 0) ;
+  digitalWrite(mot5_2, 1) ;
+  digitalWrite(mot6_1, 0) ;
+  digitalWrite(mot6_2, 1) ;
+  digitalWrite(mot7_1, 0) ;
+  digitalWrite(mot7_2, 1) ;
+  digitalWrite(mot8_1, 0) ;
+  digitalWrite(mot8_2, 1) ;
+  analogWrite(mot5_en, pwm) ;
+  analogWrite(mot6_en, pwm) ;
+  analogWrite(mot7_en, pwm) ;
+  analogWrite(mot8_en, pwm) ;
+}
+
+void stopAll() {
+  analogWrite(mot1_en, 0) ;
+  digitalWrite(mot1_1, 0) ;
+  digitalWrite(mot1_2, 0) ;
+
+  analogWrite(mot2_en, 0) ;
+  digitalWrite(mot2_1, 0) ;
+  digitalWrite(mot2_2, 0) ;
+
+  analogWrite(mot3_en, 0) ;
+  digitalWrite(mot3_1, 0) ;
+  digitalWrite(mot3_2, 0) ;
+
+  analogWrite(mot4_en, 0) ;
+  digitalWrite(mot4_1, 0) ;
+  digitalWrite(mot4_2, 0) ;
+
+  digitalWrite(mot5_1, 0) ;
+  digitalWrite(mot5_2, 0) ;
+  digitalWrite(mot6_1, 0) ;
+  digitalWrite(mot6_2, 0) ;
+  digitalWrite(mot7_1, 0) ;
+  digitalWrite(mot7_2, 0) ;
+  digitalWrite(mot8_1, 0) ;
+  digitalWrite(mot8_2, 0) ;
+  pwm = 0;
+}
+
+//////////////////////////////
+void readBMP280() {
+
+  current_alt = bme.readAltitude(1013.25);
+  Serial.print("   alti= ");
+  Serial.print(current_alt); // this should be adjusted to your local forcase
+  Serial.println();
+  //  delay(500);
+}
+
+void compasss(void)
+{
+  sensors_event_t event;
+  mag.getEvent(&event);
+  float heading = atan2(event.magnetic.y, event.magnetic.x);
+
+
+  float declinationAngle = -0.15;
+  heading += declinationAngle;
+
+  // Correct for when signs are reversed.
+  if (heading < 0)
+    heading += 2 * PI;
+
+  // Check for wrap due to addition of declination.
+  if (heading > 2 * PI)
+    heading -= 2 * PI;
+
+  // Convert radians to degrees for readability.
+  float headingDegrees = heading * 180 / M_PI;
+  if (headingDegrees > 180) {
+    current_head = (headingDegrees - 360);
+  }
+  if (headingDegrees <= 180) {
+    current_head = headingDegrees;
+  }
+  Serial.print("Heading: "); Serial.print(current_head); Serial.print("    ");
+  delay(20);
+}
+///////////////////////////////
